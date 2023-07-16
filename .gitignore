@@ -3,3 +3,6 @@
 rss.cache
 .last-updated
 .vscode
+.DS_Store
+*.pyc
+*.log
