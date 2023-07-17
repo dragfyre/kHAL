@@ -41,7 +41,8 @@ logger.setLevel(logging._nameToLevel[KBOT_LOGLEVEL])
 # Kbin regexes
 TOKEN_REGEX = re.compile('"(_csrf_token|entry_article\[_token\]|entry_comment\[_token\])"\s+value="(.+)"')
 MAGAZINE_REGEX = re.compile('"entry_article\[magazine\]\[autocomplete\]".+value="([0-9]+)"\sselected="selected"')
-THREAD_REGEX = re.compile('id="entry-([0-9]+)"[\s\w\-=":@>#<]+<a\s+href=".+">(.+)<\/a>[\s\w\-\/\.\(\)_="><]+short-desc"\sstyle="">\s+(.+)\s+<\/div>[\s\w\-\/\.,_=+":@>#<]+\s+datetime="(.+)"\s') # Group 1 is thread id, 2 is title, 3 is content, 4 is date posted
+THREAD_REGEX = re.compile('id="entry-([0-9]+)"[\s\w\-=":@>#<]+<a\s+href=".+">(.+)<\/a>') # Group 1 is thread id, 2 is title, 3 is content, 4 is date posted
+THREAD_SINGLE_REGEX = re.compile('og:title" content="(.+) - CHATBOT THUNDERDOME - kbin.social">[\s\w\-=":@>#<]+og:description" content="(.+)">') # 1 is title, 2 is body
 
 # env stuff
 KBOT_USER = os.getenv("KBOT_USER")
@@ -269,7 +270,7 @@ def list_threads(magazine: str, invalidate_cache: bool = False) -> Dict[int, str
     logger.debug("to_return: %s" % to_return)
     return to_return
 
-def post_toplevel_comment(magazine: str, thread_id: int, body: str, lang: str) -> bool:
+def post_reply(bot, magazine: str, thread_id: int) -> bool:
     response = kbin_session.get(f"https://{KBOT_INSTANCE}/m/{magazine}/t/{thread_id}")
     if response.status_code != 200:
         logger.error(f"Unexpected status code while retrieving thread: {response.status_code}")
@@ -280,6 +281,14 @@ def post_toplevel_comment(magazine: str, thread_id: int, body: str, lang: str) -
         logger.error("Could not find csrf_token while posting comment!")
         return False
     
+    
+    matches: List[re.Match[str]] = THREAD_SINGLE_REGEX.finditer(response.text)
+    for match in matches:
+        title = match.group(1)
+        desc = match.group(2)
+
+    body = generate_body(bot, "%s %s" % (title, desc))
+
     form_data = {
         "entry_comment[body]": body,
         "entry_comment[image]": ("", "", "application/octet-stream"),
@@ -298,6 +307,8 @@ def post_toplevel_comment(magazine: str, thread_id: int, body: str, lang: str) -
         "Referer": f"https://{KBOT_INSTANCE}/m/{magazine}/t/{thread_id}"
     }
 
+    logger.debug(f"Posting reply '{body}'...")
+
     retries = 3
     status = 422
     while status == 422 and retries > 0:
@@ -314,6 +325,67 @@ def post_toplevel_comment(magazine: str, thread_id: int, body: str, lang: str) -
 
     return True
 
+def generate_body(bot, prompt):
+    "Generate body text for posts or comments."
+    if not prompt:
+        prompt = ''
+
+    # At which fraction should we splice the replies?
+    frac = random.choice([0.2,0.25,0.3,0.35,0.35,0.4,0.4,0.4])
+    # Get two replies and splice them together, for extra variety
+    s3 = bot.get_reply(prompt)
+    s4 = bot.get_reply(prompt)
+    while (s3 == s4): # We got the same sentence twice, so get a new reply with different input
+        logger.error("[_] Collision: %s" % s2)
+        r = random.choice([1,2])
+        if r == 1: # Say hello
+            s2 = bot.get_reply(random.choice(hellos))
+        if r == 2: # Use a random quote
+            s2 = bot.get_reply(random.choice(["The sun is a mass of incandescent gas, a gigantic nuclear furnace where hydrogen is built into helium at a temperature of millions of degrees.",
+                                              "You only live once, but if you do it right, once is enough.",
+                                              "If you tell the truth, you don't have to remember anything.",
+                                              "I am so clever that sometimes I don't understand a single word of what I am saying.",
+                                              "Do you have any Grey Poupon?",
+                                              "What is the airspeed velocity of an unladen swallow?",
+                                              "I ask you, what do you really think of me?"]))
+
+    s5 = bot.get_reply(prompt)
+    while ((s3 == s5) or (s4 == s5)): # We got the same sentence twice, so get a new reply with different input
+        logger.error("[_] Collision: %s" % s5)
+        r = random.choice([1,2])
+        if r == 1: # Say hello
+            s5 = bot.get_reply(random.choice(hellos))
+        if r == 2: # Use a random quote
+            s5 = bot.get_reply(random.choice(["Let any fish who meets my gaze learn the true meaning of fear; for I am the harbinger of death.",
+                                              "The other day I was talking with my neighbours and they mentioned hearing weird noises.",
+                                              "The legend tells that a long time ago all seawater was fresh.",
+                                              "I’ll have you know I graduated top of my class in the Navy Seals.",
+                                              "According to all known laws of aviation, there is no way that a bee should be able to fly.",
+                                              "The running speed starts slowly, but gets faster each minute after you hear this signal.",
+                                              "Did you ever hear the tragedy of Darth Plagueis The Wise?"]))
+
+
+
+    rs3 = smart_truncate(snip_hashtags(s3))
+    rs4 = smart_truncate(snip_hashtags(s4))
+    rs5 = smart_truncate(snip_hashtags(s5))
+    body = ''
+
+    r3 = rs3.split()
+    r4 = rs4.split()
+    r5 = rs5.split()
+    if (frac < 0.3):
+        rl = r3[:math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35])))]
+        rl.extend(r4[math.ceil(len(r4)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r4)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
+        rl.extend(r5[math.ceil(len(r5)*(frac + random.choice([0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):])
+    else:
+        rl = r3[:math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35])))]
+        rl.extend(r4[math.ceil(len(r4)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r4)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
+        rl.extend(r5[math.ceil(len(r5)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r5)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
+        rl.extend(r3[math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35]))):])
+    body = smart_truncate(" ".join(rl),length=500)
+
+    return body
 
 def main():
     "Main program loop."
@@ -411,9 +483,9 @@ def main():
 
                 logger.debug(threads)
 
-                for thread_id in threads:
-                    if thread_id in threads:
-                        continue
+                # for thread_id in threads:
+                #     if thread_id in threads:
+                #         continue
                     
 
                 # for item in reversed(rss_data.channel.items):
@@ -475,60 +547,7 @@ def main():
 
                 # 2b: Body
 
-                # At which fraction should we splice the replies?
-                frac = random.choice([0.2,0.25,0.3,0.35,0.35,0.4,0.4,0.4])
-                # Get two replies and splice them together, for extra variety
-                s3 = hal.get_reply('')
-                s4 = hal.get_reply('')
-                while (s3 == s4): # We got the same sentence twice, so get a new reply with different input
-                    logger.error("[_] Collision: %s" % s2)
-                    r = random.choice([1,2])
-                    if r == 1: # Say hello
-                        s2 = hal.get_reply(random.choice(hellos))
-                    if r == 2: # Use a random quote
-                        s2 = hal.get_reply(random.choice(["The sun is a mass of incandescent gas, a gigantic nuclear furnace where hydrogen is built into helium at a temperature of millions of degrees.",
-                                                          "You only live once, but if you do it right, once is enough.",
-                                                          "If you tell the truth, you don't have to remember anything.",
-                                                          "I am so clever that sometimes I don't understand a single word of what I am saying.",
-                                                          "Do you have any Grey Poupon?",
-                                                          "What is the airspeed velocity of an unladen swallow?",
-                                                          "I ask you, what do you really think of me?"]))
-
-                s5 = hal.get_reply('')
-                while ((s3 == s5) or (s4 == s5)): # We got the same sentence twice, so get a new reply with different input
-                    logger.error("[_] Collision: %s" % s5)
-                    r = random.choice([1,2])
-                    if r == 1: # Say hello
-                        s5 = hal.get_reply(random.choice(hellos))
-                    if r == 2: # Use a random quote
-                        s5 = hal.get_reply(random.choice(["Let any fish who meets my gaze learn the true meaning of fear; for I am the harbinger of death.",
-                                                          "The other day I was talking with my neighbours and they mentioned hearing weird noises.",
-                                                          "The legend tells that a long time ago all seawater was fresh.",
-                                                          "I’ll have you know I graduated top of my class in the Navy Seals.",
-                                                          "According to all known laws of aviation, there is no way that a bee should be able to fly.",
-                                                          "The running speed starts slowly, but gets faster each minute after you hear this signal.",
-                                                          "Did you ever hear the tragedy of Darth Plagueis The Wise?"]))
-
-
-
-                rs3 = smart_truncate(snip_hashtags(s3))
-                rs4 = smart_truncate(snip_hashtags(s4))
-                rs5 = smart_truncate(snip_hashtags(s5))
-                body = ''
-
-                r3 = rs3.split()
-                r4 = rs4.split()
-                r5 = rs5.split()
-                if (frac < 0.3):
-                    rl = r3[:math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35])))]
-                    rl.extend(r4[math.ceil(len(r4)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r4)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
-                    rl.extend(r5[math.ceil(len(r5)*(frac + random.choice([0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):])
-                else:
-                    rl = r3[:math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35])))]
-                    rl.extend(r4[math.ceil(len(r4)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r4)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
-                    rl.extend(r5[math.ceil(len(r5)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r5)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
-                    rl.extend(r3[math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35]))):])
-                body = smart_truncate(" ".join(rl),length=500)
+                body = generate_body(hal, '')
 
                 logger.debug("Generated text (body): %s" % body) # Print the final reply
 
@@ -551,15 +570,19 @@ def main():
         
             #new_threads = list_threads(KBOT_MAGAZINE, True)
 
-            # comment = "\n".join([part.strip() for part in ("""
-            # @rideranton@kbin.social
-            # @rideranton@fedia.io
-
-            # Proximal Flame has posted a new chapter in The Last Angel!
-
-            # ---
-            # This action was performed automatically.
-            # """.strip("\n").split("\n"))]).strip("\n")
+            if threads:
+                thread_id = random.choice(list(threads.keys()))
+                #logger.debug(thread_id)
+                #logger.debug(list(threads.keys()))
+                result = post_reply(hal, KBOT_MAGAZINE, thread_id)
+                if not result:
+                            logger.error("Reply Failed! Attempting to login and post again...")
+                            result = login() and post(title, body)
+                    
+                        if result:
+                            logger.info(f"Successfully posted '{title}'")
+                        else:
+                            logger.error("Failed on retry =/")
 
             # for thread_id in new_threads:
             #     if thread_id in threads:
