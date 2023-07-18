@@ -28,6 +28,8 @@ from html.parser import HTMLParser
 
 load_dotenv()
 
+debug = False
+
 # OS stuff
 KBOT_STDOUT = os.getenv("KBOT_STDOUT", "/dev/fd/0")
 KBOT_STDERR = os.getenv("KBOT_STDERR", "/dev/fd/1")
@@ -61,6 +63,15 @@ assert KBOT_USER and KBOT_PASS and KBOT_INSTANCE and KBOT_MAGAZINE and KBOT_LANG
 DEFAULT_BRAINFILE = '.hal-kbot-brain' #os.path.join(os.environ.get('HOME', ''), '.pymegahal-brain')
 DEFAULT_TRAINER = 'lolstodon.trainer'
 # DEFAULT_CACHEFILE = '.hal-kbot-cache'
+
+hellos = [  # These are used to add variety to the bot's responses in case it gets stuck.
+    'hello','hi','yo','hey','whassup?','hey whassup?','yo whassup?','sup?','sup bro?','hello there','hi there',
+    "what's up?","what's going on?","what's cooking?","what's happening?","what's new?","what are you doing?",
+    "what are you thinking?","where are you?","where have you been?","who's that?","who are you?",
+    "what do you think of it?","how do you feel about that?","how are you feeling today?","what's good in the hood?",
+    "what's new with the crew?","how's your life going?","how's your day been?","tu fais quoi aujourd'hui?",
+    "tu fais quoi ce soir?","was passiert jetzt?","was ist jetzt los?","qu'est-ce qui se passe?"
+    ]
 
 cache_name = ".last-updated"
 logged_in = False
@@ -112,10 +123,23 @@ def snip_hashtags(content):
         r.append(random.choice(ht)) # Just pick one, and stick it at the end for good measure
     return " ".join(r)
 
+def log(logtype, str):
+    global debug
+    if logtype == "error":
+        logging.error("%s - %s" % (datetime.now(), str))
+        print(str)
+    elif logtype == "info":
+        logging.info("%s - %s" % (datetime.now(), str))
+        print(str)
+    elif logtype == "debug":
+        logging.debug("%s - %s" % (datetime.now(), str))
+        if debug:
+            print(str)
+
 def login_hook(r: requests.Response, *args, **kwargs):
     global logged_in
     if r.history and "login" in r.url:
-        logger.info(f"Redirected to login page: {r.status_code} {r.url}")
+        log("info",f"Redirected to login page: {r.status_code} {r.url}")
         logged_in = False
 
 
@@ -142,7 +166,7 @@ kbin_session = get_session()
 def get_csrf(response: requests.Response) -> Optional[str]:
     match = TOKEN_REGEX.search(response.text)
     if not match:
-        logger.error("Could not find csrf token!")
+        log("error","Could not find csrf token!")
         return None
     return match.group(2)
 
@@ -150,7 +174,7 @@ def login() -> bool:
     global logged_in
     response = kbin_session.get(f"https://{KBOT_INSTANCE}/login")
     if(not (200 <= response.status_code < 300)):
-        logger.error(f"Unexpected status code: {response.status_code}")
+        log("error",f"Unexpected status code: {response.status_code}")
         return False
         
     _csrf_token = get_csrf(response)
@@ -166,7 +190,7 @@ def login() -> bool:
 
     response = kbin_session.post(f"https://{KBOT_INSTANCE}/login", data=form_data)
     if response.status_code not in [200, 302]:
-        logger.error(f"Unexpected status code: {response.status_code}")
+        log("error",f"Unexpected status code: {response.status_code}")
         return False
 
     logged_in = True
@@ -175,14 +199,14 @@ def login() -> bool:
 def get_magazine(response: requests.Response) -> int:
     match = MAGAZINE_REGEX.search(response.text)
     if not match:
-        logger.error("Could not find magazine id!")
+        log("error","Could not find magazine id!")
         return -1
     return int(match.group(1))
 
 def post(title: str, description: str = None, tags: Optional[List[str]] = None) -> bool:
     response = kbin_session.get(f"https://{KBOT_INSTANCE}/m/{KBOT_MAGAZINE}/new/article")
     if(not (200 <= response.status_code < 300)):
-        logger.error(f"Unexpected status code: {response.status_code}")
+        log("error",f"Unexpected status code: {response.status_code}")
         return False
     
     _csrf_token = get_csrf(response)
@@ -226,11 +250,11 @@ def post(title: str, description: str = None, tags: Optional[List[str]] = None) 
         status = response.status_code
         if status == 422:
             retries -= 1
-            logger.debug(f"Auto retrying after delay due to 422 error... ({retries} left)")
+            log("debug",f"Auto retrying after delay due to 422 error... ({retries} left)")
             sleep(2)
     
     if(response.status_code not in [200, 302]):
-        logger.error(f"Unexpected status code: {response.status_code} - {response.url}")
+        log("error",f"Unexpected status code: {response.status_code} - {response.url}")
         return False
 
     return True
@@ -252,7 +276,7 @@ def list_threads(magazine: str, invalidate_cache: bool = False) -> Dict[int, str
     to_return = {}
     response = kbin_session.get(f"https://{KBOT_INSTANCE}/m/{magazine}")
     if response.status_code != 200:
-        logger.error(f"Got unexpected status while retrieving threads: {response.status_code}")
+        log("error",f"Got unexpected status while retrieving threads: {response.status_code}")
         return to_return
     matches: List[re.Match[str]] = THREAD_REGEX.finditer(response.text)
     for match in matches:
@@ -267,18 +291,18 @@ def list_threads(magazine: str, invalidate_cache: bool = False) -> Dict[int, str
         "threads": to_return
     }
 
-    logger.debug("to_return: %s" % to_return)
+    log("debug","to_return: %s" % to_return)
     return to_return
 
 def post_reply(bot, magazine: str, thread_id: int) -> bool:
     response = kbin_session.get(f"https://{KBOT_INSTANCE}/m/{magazine}/t/{thread_id}")
     if response.status_code != 200:
-        logger.error(f"Unexpected status code while retrieving thread: {response.status_code}")
+        log("error",f"Unexpected status code while retrieving thread: {response.status_code}")
         return False
     
     csrf_token = get_csrf(response)
     if csrf_token is None:
-        logger.error("Could not find csrf_token while posting comment!")
+        log("error","Could not find csrf_token while posting comment!")
         return False
     
     
@@ -307,7 +331,7 @@ def post_reply(bot, magazine: str, thread_id: int) -> bool:
         "Referer": f"https://{KBOT_INSTANCE}/m/{magazine}/t/{thread_id}"
     }
 
-    logger.debug(f"Posting reply '{body}'...")
+    log("debug",f"Posting reply '{body}'...")
 
     retries = 3
     status = 422
@@ -316,11 +340,11 @@ def post_reply(bot, magazine: str, thread_id: int) -> bool:
         status = response.status_code
         if status == 422:
             retries -= 1
-            logger.debug(f"Auto retrying after delay due to 422 error... ({retries} left)")
+            log("debug",f"Auto retrying after delay due to 422 error... ({retries} left)")
             sleep(2)
     
     if(response.status_code not in [200, 302]):
-        logger.error(f"Unexpected status code while adding comment: {response.status_code} - {response.url}")
+        log("error",f"Unexpected status code while adding comment: {response.status_code} - {response.url}")
         return False
 
     return True
@@ -336,22 +360,22 @@ def generate_body(bot, prompt):
     s3 = bot.get_reply(prompt)
     s4 = bot.get_reply(prompt)
     while (s3 == s4): # We got the same sentence twice, so get a new reply with different input
-        logger.error("[_] Collision: %s" % s2)
+        log("error","[_] Collision: %s" % s4)
         r = random.choice([1,2])
         if r == 1: # Say hello
-            s2 = bot.get_reply(random.choice(hellos))
+            s4 = bot.get_reply(random.choice(hellos))
         if r == 2: # Use a random quote
-            s2 = bot.get_reply(random.choice(["The sun is a mass of incandescent gas, a gigantic nuclear furnace where hydrogen is built into helium at a temperature of millions of degrees.",
+            s4 = bot.get_reply(random.choice(["The sun is a mass of incandescent gas, a gigantic nuclear furnace where hydrogen is built into helium at a temperature of millions of degrees.",
                                               "You only live once, but if you do it right, once is enough.",
                                               "If you tell the truth, you don't have to remember anything.",
                                               "I am so clever that sometimes I don't understand a single word of what I am saying.",
-                                              "Do you have any Grey Poupon?",
+                                              "Pardon me, but do you have any Grey Poupon?",
                                               "What is the airspeed velocity of an unladen swallow?",
                                               "I ask you, what do you really think of me?"]))
 
     s5 = bot.get_reply(prompt)
     while ((s3 == s5) or (s4 == s5)): # We got the same sentence twice, so get a new reply with different input
-        logger.error("[_] Collision: %s" % s5)
+        log("error","[_] Collision: %s" % s5)
         r = random.choice([1,2])
         if r == 1: # Say hello
             s5 = bot.get_reply(random.choice(hellos))
@@ -373,12 +397,21 @@ def generate_body(bot, prompt):
 
     r3 = rs3.split()
     r4 = rs4.split()
+    log("debug","is this a period: %s" % r4[-1][-1])
+    if (r4) and (r4[-1][-1] == '.'):
+        r4[-1] = r4[-1][:-1]
     r5 = rs5.split()
     if (frac < 0.3):
+        log("debug","is this a period: %s" % r3[-1][-1])
+        if (r3) and (r3[-1][-1] == '.'):
+            r3[-1] = r3[-1][:-1]
         rl = r3[:math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35])))]
         rl.extend(r4[math.ceil(len(r4)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r4)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
         rl.extend(r5[math.ceil(len(r5)*(frac + random.choice([0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):])
     else:
+        log("debug","is this a period: %s" % r5[-1][-1])
+        if (r5) and (r5[-1][-1] == '.'):
+            r5[-1] = r5[-1][:-1]
         rl = r3[:math.ceil(len(r3)*(frac + random.choice([0.1,0.15,0.2,0.25,0.3,0.35])))]
         rl.extend(r4[math.ceil(len(r4)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r4)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
         rl.extend(r5[math.ceil(len(r5)*(frac + random.choice([0,0.05,0.1,0.15,0.2,0.25,0.3,0.35]))):math.ceil(len(r5)*(frac + random.choice([0.4,0.45,0.5,0.55,0.6])))])
@@ -389,7 +422,7 @@ def generate_body(bot, prompt):
 
 def main():
     "Main program loop."
-    global logged_in
+    global logged_in, debug
     # Initialize loop helpers
     learn = True
     toot = True
@@ -400,62 +433,75 @@ def main():
     brainnotfound = False
     learned = []
 
-    hellos = [
-        'hello','hi','yo','hey','whassup?','hey whassup?','yo whassup?','sup?','sup bro?','hello there','hi there',
-        "what's up?","what's going on?","what's cooking?","what's happening?","what's new?","what are you doing?",
-        "what are you thinking?","where are you?","where have you been?","who's that?","who are you?",
-        "what do you think of it?","how do you feel about that?","how are you feeling today?","what's good in the hood?",
-        "what's new with the crew?","how's your life going?","how's your day been?","tu fais quoi aujourd'hui?",
-        "tu fais quoi ce soir?","was passiert jetzt?","was ist jetzt los?","qu'est-ce qui se passe?"
-        ]
-
-
     if not os.path.isfile(DEFAULT_BRAINFILE):
         brainnotfound = True
         brain = False
         train = True # If there's no brain, we gotta train
-        logger.info('[o] No brain found, training mode on.')
+        log("info",'[o] No brain found, training mode on.')
     else:
-        logger.info('[o] Brain found: %s KB.' % int(os.stat(DEFAULT_BRAINFILE).st_size / 1024))
+        log("info",'[o] Brain found: %s KB.' % int(os.stat(DEFAULT_BRAINFILE).st_size / 1024))
 
     if len(sys.argv) > 1:
+        # These are flags that can be invoked from the command line.
+
+        # --reset: Reset/wipe kHAL's brain and start from scratch.
+        #          This can be helpful when the brain file gets too big or if the quality
+        #          of output is getting worse.
         if not brainnotfound and '--reset' in sys.argv:
             reset = True
-            logger.info('[o] Reset mode on.')
+            log("info",'[o] Reset mode on.')
+
+        # --train: Force kHAL to start with a round of training from the default training file.
+        #          This might be helpful if you notice that output is getting too chaotic, or when
+        #          the bot has just started running with little input to learn from.
         elif not brainnotfound and  '--train' in sys.argv:
             train = True
-            logger.info('[o] Training mode on.')
+            log("info",'[o] Training mode on.')
+
+        # --offline: Run the bot offline; no learning, no posting.
         if '--offline' in sys.argv:
             learn = False
             toot = False
-            logger.info('[o] Offline mode on (No learning, no tooting).')
+            log("info",'[o] Offline mode on (No learning, no tooting).')
+
+        # --nolearn: Do not learn from external content.
         if '--nolearn' in sys.argv:
             learn = False
-            logger.info('[o] Learning mode off.')
-        if ('--notoot' in sys.argv) or ('--notoot' in sys.argv):
+            log("info",'[o] Learning mode off.')
+
+        # --notoot: Generate content, but do not post it online.
+        if ('--notoot' in sys.argv):
             toot = False
-            logger.info('[o] Tooting mode off.')
-        if ('--nofirstpost' in sys.argv) or ('--nfp' in sys.argv):
+            log("info",'[o] Tooting mode off.')
+
+        # --nofirstpost: Do not post a new thread when the bot starts up.
+        if ('--nofirstpost' in sys.argv) or ('--skipfirst' in sys.argv) or ('--nfp' in sys.argv):
             skipfirst = True
-            logger.info('[o] No First Post mode on.')
+            log("info",'[o] No First Post mode on.')
+
+        # --noisy: Display debugging messages.
+        if ('--noisy' in sys.argv):
+            debug = False
+            log("info",'[o] Noisy mode on (display debug messages).')
+
+    if not skipfirst:
+        if not (random.choice([0,1,2]) == 1):
+            skipfirst = True
 
     if reset:
         os.remove(DEFAULT_BRAINFILE)
-        logger.info('[x] Brain deleted, muahahaa!')
+        log("info",'[x] Brain deleted, muahahaa!')
         train = True
-        logger.info('[o] Training mode on.')
+        log("info",'[o] Training mode on.')
 
     # Initialize MegaHAL
     hal = MegaHAL()
-    logger.info('[*] MegaHAL loaded.')
+    log("info",'[*] MegaHAL loaded.')
 
     if train or '--train' in sys.argv:
         hal.train(DEFAULT_TRAINER)  # Learn from the training file
         train = False
-        logger.info("[o] Training complete.")
-
-    #if learn and brain and not reset:
-        #learned = load_cache()
+        log("info","[o] Training complete.")
 
     while True:
         try:
@@ -465,39 +511,10 @@ def main():
             except FileNotFoundError:
                 last_updated = parse("1970-01-01T00:00:00+00:00")
 
-            if learn:
-                #if not logged_in and :
-                #    ready = login()
-                # response = requests.get(KBOT_RSS)
-                # if not (200 <= response.status_code < 300):
-                #     logger.error("[x] Error %s while fetching posts to learn from." % response.status_code)
-                #     sleep(KBOT_FREQUENCY)
-                #     continue
-
-                # rss_data = RSSParser.parse(response.text)
-                # logger.debug(json.dumps(json.loads(rss_data.json()), indent=4))
-
-                # logger.debug(rss_data.channel.title)
-
+            # Get a list of threads to help us post comments for later
+            threads = {}
+            if toot:
                 threads = list_threads(KBOT_MAGAZINE)
-
-                logger.debug(threads)
-
-                # for thread_id in threads:
-                #     if thread_id in threads:
-                #         continue
-                    
-
-                # for item in reversed(rss_data.channel.items):
-                #     logger.debug(item.title)
-                #     pub_date = parse(str(item.pub_date))
-                #     logger.debug(pub_date)
-                #     logger.debug(item.link)
-
-                #     author = str(item.author)
-                #     match = re.search("invalid\@example\.com \((.+)\)", author)
-                #     if(match):
-                #         author = match.group(1)
 
             result = False
 
@@ -505,6 +522,7 @@ def main():
 
             if not skipfirst:
 
+                log("debug","[!] This should not appear if the following word is 'True': %s" % skipfirst)
                 # 2a: Title
 
                 # At which fraction should we splice the replies?
@@ -513,7 +531,7 @@ def main():
                 s1 = hal.get_reply('')
                 s2 = hal.get_reply('')
                 while (s1 == s2): # We got the same sentence twice, so get a new reply with different input
-                    print("[_] Collision: %s" % s2)
+                    log("error","[_] Collision: %s" % s2)
                     r = random.choice([1,2])
                     if r == 1: # Say hello
                         s2 = hal.get_reply(random.choice(hellos))
@@ -522,7 +540,7 @@ def main():
                                                           "You only live once, but if you do it right, once is enough.",
                                                           "If you tell the truth, you don't have to remember anything.",
                                                           "I am so clever that sometimes I don't understand a single word of what I am saying.",
-                                                          "Do you have any Grey Poupon?",
+                                                          "Pardon me, but do you have any Grey Poupon?",
                                                           "What is the airspeed velocity of an unladen swallow?",
                                                           "I ask you, what do you really think of me?"]))
 
@@ -541,7 +559,7 @@ def main():
                     rl.extend(r2[math.ceil(len(r2)*(frac + random.choice([0,0.05,0.1,0.15,0.2]))):])
                 title = smart_truncate(" ".join(rl),length=150)
 
-                logger.debug("Generated text (title): %s" % title) # Print the final reply
+                log("debug","Generated text (title): %s" % title) # Print the final reply
 
                 #if(last_updated < pub_date):
 
@@ -549,40 +567,40 @@ def main():
 
                 body = generate_body(hal, '')
 
-                logger.debug("Generated text (body): %s" % body) # Print the final reply
+                log("debug","Generated text (body): %s" % body) # Print the final reply
 
                 try:
                     if toot:
-                        logger.debug(f"Posting '{title}'...")
+                        log("debug",f"Posting '{title}'...")
                         result = post(title, body)
 
                         if not result:
-                            logger.error("Post Failed! Attempting to login and post again...")
+                            log("error","Post Failed! Attempting to login and post again...")
                             result = login() and post(title, body)
                     
                         if result:
-                            logger.info(f"Successfully posted '{title}'")
+                            log("info",f"Successfully posted '{title}'")
                         else:
-                            logger.error("Failed on retry =/")
+                            log("error","Failed on retry =/")
                 
                 except Exception as e:
-                    logger.error(f"Got exception while posting link: {e}")
+                    log("error",f"Got exception while posting link: {e}")
         
             #new_threads = list_threads(KBOT_MAGAZINE, True)
 
-            if threads:
+            if toot and threads:
                 thread_id = random.choice(list(threads.keys()))
-                #logger.debug(thread_id)
-                #logger.debug(list(threads.keys()))
+                #log("debug",thread_id)
+                #log("debug",list(threads.keys()))
                 result = post_reply(hal, KBOT_MAGAZINE, thread_id)
                 if not result:
-                            logger.error("Reply Failed! Attempting to login and post again...")
-                            result = login() and post(title, body)
+                    log("error","Reply Failed! Attempting to login and post again...")
+                    result = login() and post(title, body)
                     
-                        if result:
-                            logger.info(f"Successfully posted '{title}'")
-                        else:
-                            logger.error("Failed on retry =/")
+                    if result:
+                        log("info",f"Successfully posted '{title}'")
+                    else:
+                        log("error","Failed on retry =/")
 
             # for thread_id in new_threads:
             #     if thread_id in threads:
@@ -597,7 +615,7 @@ def main():
                     with open(cache_name, "w") as f:
                         f.write(datetime.utcnow().replace(tzinfo=tzutc()).isoformat())
                 except Exception as e:
-                    logger.error(f"Got exception while writing access time: {e}")
+                    log("error",f"Got exception while writing access time: {e}")
                     if os.path.exists(f"{cache_name}.bak"):
                         shutil.copyfile(f"{cache_name}.bak", cache_name)
                 finally:
@@ -606,10 +624,10 @@ def main():
 
             sleep(KBOT_FREQUENCY)
         except KeyboardInterrupt:
-            logger.info("Shutting down...")
+            logging.info("Shutting down...")
             break
         except Exception as e:
-            logger.error("Unhandled Error:", e)
+            logging.error("Unhandled Error:", e)
             sleep(KBOT_FREQUENCY)
 
     hal.close()
